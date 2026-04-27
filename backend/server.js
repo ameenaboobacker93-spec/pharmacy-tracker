@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const purchasesRouter = require('./routes/purchases');
+const initDb = require('./db/init');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -15,4 +16,6 @@ app.use(express.json());
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/api/purchases', purchasesRouter);
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+initDb().then(() => {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+});
