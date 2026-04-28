@@ -36,7 +36,7 @@ export default function AddPurchaseForm({ onAdd }) {
         </div>
         <div className="form-group">
           <label>Supplier *</label>
-          <input type="text" placeholder="e.g. Neogyl Pharma" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} />
+          <input type="text" placeholder="e.g. Acorus" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} />
         </div>
         <div className="form-group">
           <label>Invoice Number *</label>
