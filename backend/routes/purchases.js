@@ -87,15 +87,26 @@ router.post('/', async (req, res) => {
   try {
     const { purchase_date, supplier, invoice_number, grn_number, amount, payment_terms } = req.body;
 
-    if (!purchase_date || !supplier || !invoice_number || !amount || !payment_terms) {
+    if (!purchase_date || !supplier || !invoice_number || !amount || payment_terms === undefined) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Calculate due_date and net_due
+    const due_date = new Date(purchase_date);
+    if (parseInt(payment_terms) === 0) {
+      // Cash payment - due date is same as purchase date
+      due_date.setTime(due_date.getTime()); // Keep same date
+    } else {
+      // Credit payment - add payment terms days
+      due_date.setDate(due_date.getDate() + parseInt(payment_terms));
+    }
+    const net_due = parseFloat(amount);
+
     const result = await pool.query(
-      `INSERT INTO purchases (purchase_date, supplier, invoice_number, grn_number, amount, payment_terms)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO purchases (purchase_date, supplier, invoice_number, grn_number, amount, payment_terms, due_date, net_due)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [purchase_date, supplier, invoice_number, grn_number || null, amount, payment_terms]
+      [purchase_date, supplier, invoice_number, grn_number || null, amount, payment_terms, due_date, net_due]
     );
 
     res.status(201).json(result.rows[0]);
@@ -111,12 +122,23 @@ router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { purchase_date, supplier, invoice_number, grn_number, amount, payment_terms } = req.body;
 
+    // Calculate due_date and net_due
+    const due_date = new Date(purchase_date);
+    if (parseInt(payment_terms) === 0) {
+      // Cash payment - due date is same as purchase date
+      due_date.setTime(due_date.getTime()); // Keep same date
+    } else {
+      // Credit payment - add payment terms days
+      due_date.setDate(due_date.getDate() + parseInt(payment_terms));
+    }
+    const net_due = parseFloat(amount);
+
     const result = await pool.query(
       `UPDATE purchases
-       SET purchase_date=$1, supplier=$2, invoice_number=$3, grn_number=$4, amount=$5, payment_terms=$6
-       WHERE id=$7
+       SET purchase_date=$1, supplier=$2, invoice_number=$3, grn_number=$4, amount=$5, payment_terms=$6, due_date=$7, net_due=$8
+       WHERE id=$9
        RETURNING *`,
-      [purchase_date, supplier, invoice_number, grn_number || null, amount, payment_terms, id]
+      [purchase_date, supplier, invoice_number, grn_number || null, amount, payment_terms, due_date, net_due, id]
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
@@ -133,15 +155,22 @@ router.patch('/:id/return', async (req, res) => {
     const { id } = req.params;
     const { return_amount, cn_status, cn_number } = req.body;
 
+    // Get current purchase to calculate new net_due
+    const current = await pool.query('SELECT amount FROM purchases WHERE id=$1', [id]);
+    if (current.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    
+    const amount = parseFloat(current.rows[0].amount);
+    const returnAmt = parseFloat(return_amount) || 0;
+    const net_due = amount - returnAmt;
+
     const result = await pool.query(
       `UPDATE purchases
-       SET return_amount=$1, cn_status=$2, cn_number=$3
-       WHERE id=$4
+       SET return_amount=$1, cn_status=$2, cn_number=$3, net_due=$4
+       WHERE id=$5
        RETURNING *`,
-      [return_amount || 0, cn_status || 'not_received', cn_number || null, id]
+      [returnAmt, cn_status || 'not_received', cn_number || null, net_due, id]
     );
 
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
   } catch (err) {
     console.error(err);
