@@ -43,7 +43,5 @@ app.get('/api/init-db', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/api/purchases', purchasesRouter);
-app.use('/api/setup', require('./routes/setup'));
-app.use('/api/test', require('./routes/test'));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
