@@ -25,18 +25,12 @@ async function initializeDatabase() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS purchases (
         id SERIAL PRIMARY KEY,
+        purchase_date DATE NOT NULL,
         supplier_name VARCHAR(255) NOT NULL,
-        invoice_no VARCHAR(255) NOT NULL,
-        invoice_date DATE NOT NULL,
-        medicine_name VARCHAR(255) NOT NULL,
-        batch_no VARCHAR(255) NOT NULL,
-        expiry_date DATE NOT NULL,
-        quantity INTEGER NOT NULL,
-        free_quantity INTEGER DEFAULT 0,
-        mrp DECIMAL(10,2) NOT NULL,
-        purchase_rate DECIMAL(10,2) NOT NULL,
-        gst DECIMAL(5,2) DEFAULT 0,
+        invoice_number VARCHAR(255) NOT NULL,
+        grn_number VARCHAR(255) NOT NULL,
         total_amount DECIMAL(10,2) NOT NULL,
+        payment_terms VARCHAR(20) NOT NULL DEFAULT 'cash',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -47,21 +41,8 @@ async function initializeDatabase() {
         date DATE NOT NULL,
         from_branch VARCHAR(255) NOT NULL,
         to_branch VARCHAR(255) NOT NULL,
-        medicine_name VARCHAR(255) NOT NULL,
-        batch_no VARCHAR(255) NOT NULL,
+        description TEXT,
         quantity INTEGER NOT NULL,
-        reason TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS returns (
-        id SERIAL PRIMARY KEY,
-        purchase_id INTEGER REFERENCES purchases(id),
-        return_quantity INTEGER NOT NULL,
-        return_reason VARCHAR(255) NOT NULL,
-        return_date DATE NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -89,26 +70,20 @@ app.get('/api/purchases', async (req, res) => {
 app.post('/api/purchases', async (req, res) => {
   try {
     const {
+      purchase_date,
       supplier_name,
-      invoice_no,
-      invoice_date,
-      medicine_name,
-      batch_no,
-      expiry_date,
-      quantity,
-      free_quantity,
-      mrp,
-      purchase_rate,
-      gst,
-      total_amount
+      invoice_number,
+      grn_number,
+      total_amount,
+      payment_terms
     } = req.body;
 
     const result = await pool.query(
       `INSERT INTO purchases 
-       (supplier_name, invoice_no, invoice_date, medicine_name, batch_no, expiry_date, quantity, free_quantity, mrp, purchase_rate, gst, total_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       (purchase_date, supplier_name, invoice_number, grn_number, total_amount, payment_terms)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [supplier_name, invoice_no, invoice_date, medicine_name, batch_no, expiry_date, quantity, free_quantity, mrp, purchase_rate, gst, total_amount]
+      [purchase_date, supplier_name, invoice_number, grn_number, total_amount, payment_terms]
     );
 
     res.status(201).json(result.rows[0]);
@@ -123,27 +98,20 @@ app.put('/api/purchases/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const {
+      purchase_date,
       supplier_name,
-      invoice_no,
-      invoice_date,
-      medicine_name,
-      batch_no,
-      expiry_date,
-      quantity,
-      free_quantity,
-      mrp,
-      purchase_rate,
-      gst,
-      total_amount
+      invoice_number,
+      grn_number,
+      total_amount,
+      payment_terms
     } = req.body;
 
     const result = await pool.query(
       `UPDATE purchases 
-       SET supplier_name = $1, invoice_no = $2, invoice_date = $3, medicine_name = $4, batch_no = $5, expiry_date = $6,
-           quantity = $7, free_quantity = $8, mrp = $9, purchase_rate = $10, gst = $11, total_amount = $12
-       WHERE id = $13
+       SET purchase_date = $1, supplier_name = $2, invoice_number = $3, grn_number = $4, total_amount = $5, payment_terms = $6
+       WHERE id = $7
        RETURNING *`,
-      [supplier_name, invoice_no, invoice_date, medicine_name, batch_no, expiry_date, quantity, free_quantity, mrp, purchase_rate, gst, total_amount, id]
+      [purchase_date, supplier_name, invoice_number, grn_number, total_amount, payment_terms, id]
     );
 
     if (result.rows.length === 0) {
@@ -204,70 +172,7 @@ app.post('/api/ibt', async (req, res) => {
   }
 });
 
-// Process return
-app.post('/api/returns', async (req, res) => {
-  try {
-    const { purchase_id, return_quantity, return_reason, return_date } = req.body;
 
-    // Start transaction
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Add return record
-      const returnResult = await client.query(
-        `INSERT INTO returns (purchase_id, return_quantity, return_reason, return_date)
-         VALUES ($1, $2, $3, $4)
-         RETURNING *`,
-        [purchase_id, return_quantity, return_reason, return_date]
-      );
-
-      // Update purchase quantity
-      await client.query(
-        `UPDATE purchases 
-         SET quantity = quantity - $1
-         WHERE id = $2`,
-        [return_quantity, purchase_id]
-      );
-
-      // Add IBT transaction for the return
-      const purchase = await client.query('SELECT medicine_name, batch_no FROM purchases WHERE id = $1', [purchase_id]);
-      if (purchase.rows.length > 0) {
-        await client.query(
-          `INSERT INTO ibt_transactions (date, from_branch, to_branch, medicine_name, batch_no, quantity, reason)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [return_date, 'Main Store', 'Returns', purchase.rows[0].medicine_name, purchase.rows[0].batch_no, return_quantity, return_reason]
-        );
-      }
-
-      await client.query('COMMIT');
-      res.status(201).json(returnResult.rows[0]);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error('Error processing return:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get unique months for filtering
-app.get('/api/months', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT DISTINCT TO_CHAR(invoice_date, 'YYYY-MM') as month 
-      FROM purchases 
-      ORDER BY month DESC
-    `);
-    res.json(result.rows.map(row => row.month));
-  } catch (error) {
-    console.error('Error fetching months:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
 // Get unique suppliers for filtering
 app.get('/api/suppliers', async (req, res) => {
